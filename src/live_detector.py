@@ -74,7 +74,7 @@ def start_monitor():
 
         #threshold and response logic
         #0.5 is the caution flag, 0.7+ is red alert 
-        if e_score>0.5 or c_score>0.5:
+        if e_score>0.1 or c_score>0.05:
             status = "!! Detected anomaly !!"
             marker = "[!]"
         else:
