@@ -4,6 +4,7 @@ import hashlib
 import time
 import os
 import sys
+from bus_handler import TelemetryBus
 
 #AROS-S detector
 #logic: Dual-Subspace Isolation Forests + autoencoder (Layer 2) + SHA-256 integrity layer
@@ -19,8 +20,8 @@ def get_file_hash(path):
             sha256.update(chunk)
     return sha256.hexdigest()
 
-def start_monitor():
-    print("AROS-S: initializing on-board security module...")
+def start_monitor(mode='UDP'):
+    print(f"AROS-S: initializing on-board security module in {mode} mode...")
 
     #component registry, paths to the artifacts generated during ground-prep and training
     files = {
@@ -48,23 +49,13 @@ def start_monitor():
         print(f"Critical BOOT Failure: {e}")
         sys.exit(1)
 
-    #Telemetry stream intake
-    #simulation- reading from the verified attack stream CSV
-
-    input_source='data/attack_telemetry.csv'
-
-    if not os.path.exists(input_source):
-        print(f"Stream error: {input_source} not found.")
-        return
-    
-    stream=pd.read_csv(input_source)
-    print(f"AROS-S: stream active. Processing {len(stream)} packets...")
+    bus = TelemetryBus(mode=mode)
+    print(f"AROS-S: {mode} stream active. Listening for packets...")
     print("-" * 60)
 
-    #processing loop
-    for i in range(len(stream)):
-        #capture raw telemetry packet
-        packet=stream.iloc[[i]]
+    #enumerate to keep track of the packet count (Pkt:001, etc.)
+    #the 'bus.stream()' generator handles the 'for' loop logic now
+    for i, packet in enumerate(bus.stream()):
 
         #normalisation iqr based, ml need feature on the same scale 
         packet_scaled=pd.DataFrame(scaler.transform(packet), columns=packet.columns)
@@ -101,8 +92,10 @@ def start_monitor():
         print(f"{marker} {timestamp} | Pkt:{i:03} | Status: {status} [{source}]")
         print(f"    [Scores] Elec: {e_score:+.3f} | Comp: {c_score:+.3f} | NN-MSE: {mse:.4f}")
 
-        # Real-time simulation delay
-        time.sleep(0.4)
+        #real time simulation delay
+        if mode=='CSV':
+            time.sleep(0.4)
 
 if __name__ == "__main__":
-    start_monitor()
+    start_monitor(mode='UDP')
+    #start_monitor(mode='CSV')
