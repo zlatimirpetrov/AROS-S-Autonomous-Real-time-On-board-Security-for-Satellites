@@ -4,7 +4,11 @@ import hashlib
 import time
 import os
 import sys
+import csv
 from bus_handler import TelemetryBus
+
+LOG_DIR="logs"
+LOG_FILE=os.path.join(LOG_DIR, f"mission_log_{time.strftime('%Y%m%d_%H%M%S')}.csv")
 
 #AROS-S detector
 #logic: Dual-Subspace Isolation Forests + autoencoder (Layer 2) + SHA-256 integrity layer
@@ -20,7 +24,19 @@ def get_file_hash(path):
             sha256.update(chunk)
     return sha256.hexdigest()
 
+def log_telemetry(data_row):
+    file_exists=os.path.isfile(LOG_FILE)
+    with open(LOG_FILE, 'a', newline='') as f:
+        writer=csv.DictWriter(f, fieldnames=data_row.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(data_row)
+
 def start_monitor(mode='UDP'):
+
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+
     print(f"AROS-S: initializing on-board security module in {mode} mode...")
 
     #component registry, paths to the artifacts generated during ground-prep and training
@@ -91,6 +107,19 @@ def start_monitor(mode='UDP'):
         timestamp = time.strftime("%H:%M:%S")
         print(f"{marker} {timestamp} | Pkt:{i:03} | Status: {status} [{source}]")
         print(f"    [Scores] Elec: {e_score:+.3f} | Comp: {c_score:+.3f} | NN-MSE: {mse:.4f}")
+
+        #persistence: save to flight recorder
+        log_entry = packet.iloc[0].to_dict()
+        log_entry.update({
+            'timestamp': timestamp,
+            'packet_id': i,
+            'elec_score': round(e_score, 4),
+            'comp_score': round(c_score, 4),
+            'nn_mse': round(mse, 4),
+            'status': status,
+            'source': source
+        })
+        log_telemetry(log_entry)
 
         #real time simulation delay
         if mode=='CSV':
