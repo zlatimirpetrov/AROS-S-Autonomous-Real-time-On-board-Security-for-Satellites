@@ -18,13 +18,22 @@ class TelemetryBus:
 
         elif self.mode=='UDP':
             sock= socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+            #the port can be reused immediately on restart
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
             sock.bind(('0.0.0.0', self.port))
+
             while True:
-                try:
-                    data, _ = sock.recvfrom(4096)
+                data, addr = sock.recvfrom(4096)
+
+                try: 
                     packet_dict = json.loads(data.decode('utf-8'))
-                    yield pd.DataFrame([packet_dict])[self.features]
-                except (json.JSONDecodeError, KeyError) as e:
+                    df = pd.DataFrame([packet_dict])
+
+                    #ensure we only yield the columns the model expects
+                    yield df[self.features]
+                except Exception as e:
                     print(f"AROS-S [Bus Error]: dropping malformed packet: {e}")
                     continue

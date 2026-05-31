@@ -13,12 +13,11 @@ def simulate_bus(data_path='data/attack_telemetry.csv', port=5005):
 
     for i, row in df.iterrows():
         #row to JSON (simulation of telemetry data)
-        packet=row.to_json().encode('utf-8')
+        packet=json.dumps(row.to_dict()).encode('utf-8')
         sock.sendto(packet,server_address)
 
-        if i % 5 == 0:
-            print(f"Sent packet {i:03}...")
-        time.sleep(0.5)  # 2Hz telemetry rate
+        print(f"Sent packet {i:03} to {server_address}")
+        time.sleep(0.5)
 
 if __name__=="__main__":
     simulate_bus()
