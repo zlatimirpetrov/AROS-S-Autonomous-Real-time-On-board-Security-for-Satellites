@@ -1,12 +1,16 @@
 import socket
 import json
 import time
+import os
 import pandas as pd
 
 def simulate_bus(data_path='data/attack_telemetry.csv', port=5005):
     #setup udp socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server_address=('127.0.0.1', port)
+    TARGET_HOST = os.getenv('AROS_DETECTOR_HOST', '127.0.0.1')
+    TARGET_PORT = int(os.getenv('AROS_DETECTOR_PORT', 5005))
+
+    server_address = (TARGET_HOST, TARGET_PORT)
 
     df=pd.read_csv(data_path)
     print(f"Satellite bus: streaming {len(df)} packets to port {port}...")
