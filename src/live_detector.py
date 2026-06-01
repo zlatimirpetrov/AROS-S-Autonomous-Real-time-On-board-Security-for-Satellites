@@ -87,7 +87,8 @@ def start_monitor(mode='UDP'):
         mse= ((packet_scaled.values-reconstruction)**2).mean()
 
         # hybrid threshold logic, if either layer flags an issue, trigger the alert
-        is_forest_anomaly=(e_score>0.1 or c_score>0.05)
+        #tuned to catch the +0.080 and +0.000 signatures seen in the live run
+        is_forest_anomaly=(e_score>0.05 or c_score>-0.01)
         is_neural_anomaly=(mse > 0.2) #0.2 is a strict threshold for reconstruction error
 
         if is_forest_anomaly or is_neural_anomaly:
