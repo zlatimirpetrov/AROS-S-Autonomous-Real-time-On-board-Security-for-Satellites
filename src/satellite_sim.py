@@ -4,17 +4,25 @@ import time
 import os
 import pandas as pd
 from dotenv import load_dotenv
+from attack_sim import create_malicious_telemetry
 
 #local env
 load_dotenv()
 
 def simulate_bus(data_path='data/attack_telemetry.csv', port=5005):
+    #creating malicious telemetry
+    create_malicious_telemetry()
     #setup udp socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     TARGET_HOST = os.getenv('AROS_DETECTOR_HOST', '127.0.0.1')
     TARGET_PORT = int(os.getenv('AROS_DETECTOR_PORT', 5005))
 
     server_address = (TARGET_HOST, TARGET_PORT)
+
+    #read the generated telemetry
+    if not os.path.exists(data_path):
+        print(f"Error: {data_path} was not generated successfully.")
+        return
 
     df=pd.read_csv(data_path)
     print(f"Satellite bus: streaming {len(df)} packets to port {port}...")

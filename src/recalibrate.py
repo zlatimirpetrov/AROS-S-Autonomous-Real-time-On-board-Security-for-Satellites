@@ -17,7 +17,7 @@ def recalibrate_brain():
     clean_data=pd.read_csv('data/raw_telemetry.csv')
 
     #space noise script
-    nasa_logs='logs/mission_log_20260531_150233.csv'
+    nasa_logs='logs/mission_log_20260601_172452.csv'
     if not os.path.exists(nasa_logs):
         print(f"Error: {nasa_logs} missing. Update the filename in the script.")
         return
