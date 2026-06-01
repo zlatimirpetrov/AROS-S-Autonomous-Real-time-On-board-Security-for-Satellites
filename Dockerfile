@@ -15,4 +15,5 @@ RUN chown -R satellite_user:satellite_user /app
 #switch to the no privileged user
 USER satellite_user
 
+ENV PYTHONUNBUFFERED=1
 CMD ["python", "src/live_detector.py"]

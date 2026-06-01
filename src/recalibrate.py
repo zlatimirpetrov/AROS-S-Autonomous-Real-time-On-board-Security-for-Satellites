@@ -56,17 +56,17 @@ def recalibrate_brain():
 
     #define the Autoencoder
     nn_model = MLPRegressor(
-        hidden_layer_sizes=(3,), 
+        hidden_layer_sizes=(16, 8, 16),  #upgraded brain capacity
         activation='relu',
         solver='adam',
-        max_iter=1000,
+        max_iter=1500,
         random_state=42,
-        early_stopping=True 
+        early_stopping=False 
     )
 
     #train the brain to reconstruct both perfect data and nasa noise
     print("Training neural layer... this may take a moment.")
-    nn_model.fit(scaled_data, scaled_data)
+    nn_model.fit(scaled_df, scaled_df)
 
     #overwrite the old brain
     joblib.dump(nn_model, 'models/model_autoencoder.joblib')

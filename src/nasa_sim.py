@@ -3,6 +3,10 @@ import time
 import os
 import pandas as pd
 from nasa_adapter import transform_smap_to_aros
+from dotenv import load_dotenv
+
+#local env
+load_dotenv()
 
 def run_ghost_mission():
 

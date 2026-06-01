@@ -3,6 +3,10 @@ import json
 import time
 import os
 import pandas as pd
+from dotenv import load_dotenv
+
+#local env
+load_dotenv()
 
 def simulate_bus(data_path='data/attack_telemetry.csv', port=5005):
     #setup udp socket
