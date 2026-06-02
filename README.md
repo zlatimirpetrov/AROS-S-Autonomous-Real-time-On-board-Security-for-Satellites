@@ -17,10 +17,18 @@ It’s designed to flag anomalies like DoS-related CPU spikes or suspicious powe
 
 ---
 
-## Technical Stack & Environment
+## Containerization & Environment Hardening
+Operating in an embedded space payload requires strict operational isolation. Standard container runtimes present a massive risk if a malicious process achieves root escalation. To counter this, AROS-S enforces an enterprise-grade sandboxing environment:
+
+* **Rootless Podman Architecture:** Built on top of a `python:3.11-slim` base image, the entire stack runs entirely in user-space without root privileges. If an adversary compromises the detector runtime, they remain trapped inside an unprivileged user namespace, completely unable to break out to the host flight computer kernel.
+* **Linux Namespace Isolation & CGroups:** We restrict access using precise kernel boundaries—isolating network (`net`), process IDs (`pid`), and mount points (`mnt`). Linux Control Groups (`cgroups v2`) are locked down to strictly cap RAM and CPU ceilings, preventing any algorithmic resource exhaustion (DoS) from starving critical flight control systems.
+* **Read-Only Root Filesystem:** The container runtime mounts the application source directory as read-only. Temporary logs and execution frames are isolated to a transient `tmpfs` RAM disk, neutralizing persistent file-injection attacks at the container boundary.
+
+---
+
+## Technical Stack & Engine Framework
 I chose this particular stack to achieve a balance between substantial processing capability and the limited resources found in an embedded satellite environment:
 
-* **Runtime Environment:** Transitioned to a `python:3.11-slim` base image running inside a hardened, rootless **Podman** container architecture to eliminate rootless privilege vulnerabilities and minimize attack surfaces.
 * **Data Engineering:** Utilized **Pandas** and **NumPy** for vectorized telemetry normalization, utilizing an integrated `RobustScaler` preprocessing pipeline for noisy sensor frames.
 * **Inference Engine:** Migrated the detection engine from heavy, high-overhead Python frameworks to **ONNX Runtime**, compiling raw computational graphs into serial format for ultra-low latency execution via a C++ backend.
 * **Cloud Infrastructure:** Integrated **Hugging Face Hub** APIs for remote asset orchestration—maintaining separate pipelines for optimized model binaries and S3-style cloud object buckets for raw ground-station telemetry logging.
@@ -28,7 +36,7 @@ I chose this particular stack to achieve a balance between substantial processin
 
 ---
 
-## Cybersecurity
+## Cybersecurity & Integrity Anchoring
 I recently completed a fast-paced development sprint to implement the essential detection logic while maintaining strong architectural integrity.
 
 * **Logic Implementation:** Successfully engineered and integrated the multi-layer neural and statistical ensemble pipeline.
@@ -37,15 +45,23 @@ I recently completed a fast-paced development sprint to implement the essential 
 
 ---
 
-## Detection Logic
-The system uses a two-layer approach to handle both sudden spikes and subtle behavioral drifts.
+## Detection Logic & Machine Learning Architecture
+The system uses a two-layer hybrid machine learning pipeline running in tandem to track sudden structural shifts and subtle, slow-moving behavioral drifts simultaneously.
 
-### Layer 1: Partitioned Statistical Isolation
-I’m using an Isolation Forest to intercept point-anomalies. I partitioned the telemetry into Electrical and Computational subspaces to prevent cross-channel masking.
-$$s(x, \psi) = 2^{-rac{E(h(x))}{c(\psi)}}$$
+### Layer 1: Partitioned Statistical Isolation (Isolation Forest)
+I am using a multi-instance **Isolation Forest** (iForest) to instantly trap point anomalies like malicious command execution or single-packet spikes. 
+Instead of processing all telemetry under a single high-dimensional model, the parameters are completely isolated into independent mathematical subspaces:
+* **Electrical Subspace:** Monitors voltage vectors and total current consumption (`V_bus`, `I_total`) to isolate power-draining malware or transmitter overloads.
+* **Computational Subspace:** Tracks system load variables (`CPU_load`, `RAM_usage`, `MCU_temp`) to immediately identify CPU exhaustion attacks.
 
-### Layer 2: Neural Behavioral Reconstruction
-To detect subtle exploits, I engineered a bottleneck Autoencoder restricted to just **38 parameters** due to RAM constraints. It maps spatial relationships across all telemetry parameters concurrently. If the reconstruction Mean Squared Error (MSE) breaches the strict calibrated threshold, a behavioral alert is flagged.
+By partitioning features, we eliminate "cross-channel masking"—a vulnerability where massive computational spikes trick a model into missing minor but devastating electrical siphoning. The isolation path-length math maps directly to an anomaly score:
+$$s(x, \psi) = 2^{-\frac{E(h(x))}{c(\psi)}}$$
+
+### Layer 2: Neural Behavioral Reconstruction (Bottleneck Autoencoder)
+To track complex, highly coordinated cyber campaigns (like advanced persistent threats tricking sensor inputs over time), AROS-S routes data into a custom **Deep Bottleneck Autoencoder**.
+* **The Topology:** Designed with a symmetric **5-3-5 layer topology** (5 inputs $\rightarrow$ 3 bottleneck features $\rightarrow$ 5 reconstructed outputs).
+* **Embedded Optimization:** The model structure is aggressively optimized to compress features down to just **38 parameters** to conform to the payload’s strict static RAM limitations.
+* **Mathematical Enforcement:** The network forces data through an ultra-tight bottleneck, forcing it to learn the core physical correlations of nominal spacecraft state vectors. When an adversary injects synthetic or altered packets, the network fails to reconstruct the corrupted signatures accurately. This structural failure causes the Mean Squared Error (MSE) to spike, immediately tripping the alert threshold.
 
 ---
 
