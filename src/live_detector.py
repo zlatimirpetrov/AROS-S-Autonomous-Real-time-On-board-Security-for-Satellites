@@ -26,10 +26,10 @@ MODEL_FILES = {
 
 #replace these strings with your models' true short hashes after your first clean execution
 GOLDEN_SIGNATURES = {
-    'scaler': 'a1b2c3d4',
-    'elec': 'e5f6g7h8',
-    'comp': '9j0k1l2m',
-    'auto': 'n3o4p5q6'
+    'scaler': 'c6bbacd6',
+    'elec': 'fd3416bc',
+    'comp': '739dadce',
+    'auto': 'e05e050f'
 }
 
 def get_file_hash(path):
