@@ -1,10 +1,13 @@
 import pandas as pd
-import joblib
+import onnxruntime as ort
 import hashlib
+import numpy as np
 import time
 import os
 import sys
 import csv
+from bus_handler import TelemetryBus
+from huggingface_hub import hf_hub_download
 from bus_handler import TelemetryBus
 
 LOG_DIR="logs"
@@ -12,6 +15,15 @@ LOG_FILE=os.path.join(LOG_DIR, f"mission_log_{time.strftime('%Y%m%d_%H%M%S')}.cs
 
 #AROS-S detector
 #logic: Dual-Subspace Isolation Forests + autoencoder (Layer 2) + SHA-256 integrity layer
+
+#core model registry config
+HF_REPO_ID = "zlatimirpetrov/aros-s-anomaly-detector"
+MODEL_FILES = {
+    'scaler': 'models/scaler.onnx',
+    'elec': 'models/model_electrical.onnx',
+    'comp': 'models/model_computational.onnx',
+    'auto': 'models/model_autoencoder.onnx'
+}
 
 def get_file_hash(path):
     """
@@ -38,32 +50,34 @@ def start_monitor(mode='UDP'):
         os.makedirs(LOG_DIR)
 
     print(f"AROS-S: initializing on-board security module in {mode} mode...")
+    print(f"AROS-S: Resolving runtime artifacts from cloud registry [{HF_REPO_ID}]...")
 
-    #component registry, paths to the artifacts generated during ground-prep and training
-    files = {
-        'scaler': 'models/scaler.joblib',
-        'elec': 'models/model_electrical.joblib',
-        'comp': 'models/model_computational.joblib',
-        'auto': 'models/model_autoencoder.joblib'
-    }
+    #hold the initialized C++ ONNX sessions
+    sessions = {}
 
     #integrity loading, verify files exists and log their unique signatures for the mission log
     try:
-        for name,path in files.items():
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"Missing {name} artifact.")
-            
-            sig=get_file_hash(path) [:8]  #log short-hash
-            print(f"Verified: {path} [SIG:{sig}]")
+        for name,repo_path in MODEL_FILES.items():
+            #downloads/locates the file via the HF API cache mechanism
+            local_cached_path = hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)
 
-        scaler=joblib.load(files['scaler'])
-        m_elec=joblib.load(files['elec'])
-        m_comp=joblib.load(files['comp'])
-        m_auto = joblib.load(files['auto'])
+            sig=get_file_hash(local_cached_path)[:8]
+            print(f"Verified: {repo_path} -> Cached at edge [SHA-256 SIG: {sig}]")
+
+            #compiles the mathematical graph into memory using an Inference Session
+            sessions[name]= ort.InferenceSession(local_cached_path)
+
+        print("All optimized ONNX sessions successfully initialized.")
     
     except Exception as e:
-        print(f"Critical BOOT Failure: {e}")
+        print(f"Critical BOOT Failure during asset resolution: {e}")
         sys.exit(1)
+
+    #unpacks our dictionary into explicit session handlers to keep downstream math clean
+    s_scaler = sessions['scaler']
+    s_elec = sessions['elec']
+    s_comp = sessions['comp']
+    s_auto = sessions['auto']
 
     bus = TelemetryBus(mode=mode)
     print(f"AROS-S: {mode} stream active. Listening for packets...")
@@ -73,20 +87,31 @@ def start_monitor(mode='UDP'):
     #the 'bus.stream()' generator handles the 'for' loop logic now
     for i, packet in enumerate(bus.stream()):
 
-        #normalisation iqr based, ml need feature on the same scale 
-        packet_scaled=pd.DataFrame(scaler.transform(packet), columns=packet.columns)
+        feature_order = list(packet.columns)
 
-        #dual-forest scoring, the decision function return negative values for anomalies 
-        #high-score = high-danger
-        e_score= -m_elec.decision_function(packet_scaled[['V_bus', 'I_total']])[0]
-        c_score= -m_comp.decision_function(packet_scaled[['CPU_load', 'RAM_usage', 'MCU_temp']])[0]
+        scaler_input_name = s_scaler.get_inputs()[0].name
+        raw_input_matrix = packet.to_numpy().astype(np.float32)
+        #execute the scaler graph across its input gate
+        scaled_matrix = s_scaler.run(None, {scaler_input_name: raw_input_matrix})[0]
+        
+        #reconstruct the DataFrame 
+        packet_scaled = pd.DataFrame(scaled_matrix, columns=feature_order)
 
-        #Layer 2 neural net autoencoder (pattern breakdown)
-        reconstruction=m_auto.predict(packet_scaled)
-        #mean squared error, how badly the nn fails to rebuild the data
-        mse= ((packet_scaled.values-reconstruction)**2).mean()
+        #2D float32 matrices
+        elec_features = packet_scaled[['V_bus', 'I_total']].to_numpy().astype(np.float32)
+        comp_features = packet_scaled[['CPU_load', 'RAM_usage', 'MCU_temp']].to_numpy().astype(np.float32)
 
-        # hybrid threshold logic, if either layer flags an issue, trigger the alert
+        e_score = -s_elec.run(None, {s_elec.get_inputs()[0].name: elec_features})[1][0][0]
+        c_score = -s_comp.run(None, {s_comp.get_inputs()[0].name: comp_features})[1][0][0]
+
+        #global standardized array to float32
+        auto_input_matrix = packet_scaled.to_numpy().astype(np.float32)
+        #run data through the Autoencoder compression/decompression neural graph
+        reconstruction = s_auto.run(None, {s_auto.get_inputs()[0].name: auto_input_matrix})[0]
+        
+        mse = float(((packet_scaled.values - reconstruction) ** 2).mean())
+
+        #hybrid threshold logic, if either layer flags an issue, trigger the alert
         #tuned to catch the +0.080 and +0.000 signatures seen in the live run
         is_forest_anomaly=(e_score>0.05 or c_score>-0.01)
         is_neural_anomaly=(mse > 0.2) #0.2 is a strict threshold for reconstruction error
