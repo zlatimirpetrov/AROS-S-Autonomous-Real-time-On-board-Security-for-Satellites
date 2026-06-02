@@ -6,7 +6,7 @@
 
 ## Cloud Resources & Repositories
 * **Model Registry (Hugging Face):** https://huggingface.co/zlatimirpetrov/aros-s-anomaly-detector
-* **Telemetry Storage Bucket (Hugging Face):** https://huggingface.co/datasets/zlatimirpetrov/aros-s-detector-storage
+* **Telemetry Storage Bucket (Hugging Face):** https://huggingface.co/buckets/zlatimirpetrov/aros-s-detector-storage
 
 ---
 
