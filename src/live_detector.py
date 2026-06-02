@@ -1,14 +1,13 @@
-import pandas as pd
-import onnxruntime as ort
-import hashlib
-import numpy as np
-import time
 import os
 import sys
 import csv
+import time
+import hashlib
+import numpy as np
+import pandas as pd
+import onnxruntime as ort
 from bus_handler import TelemetryBus
 from huggingface_hub import hf_hub_download
-from bus_handler import TelemetryBus
 
 LOG_DIR="logs"
 LOG_FILE=os.path.join(LOG_DIR, f"mission_log_{time.strftime('%Y%m%d_%H%M%S')}.csv")
@@ -23,6 +22,14 @@ MODEL_FILES = {
     'elec': 'models/model_electrical.onnx',
     'comp': 'models/model_computational.onnx',
     'auto': 'models/model_autoencoder.onnx'
+}
+
+#replace these strings with your models' true short hashes after your first clean execution
+GOLDEN_SIGNATURES = {
+    'scaler': 'a1b2c3d4',
+    'elec': 'e5f6g7h8',
+    'comp': '9j0k1l2m',
+    'auto': 'n3o4p5q6'
 }
 
 def get_file_hash(path):
@@ -62,8 +69,14 @@ def start_monitor(mode='UDP'):
             local_cached_path = hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)
 
             sig=get_file_hash(local_cached_path)[:8]
+            
+            if sig != GOLDEN_SIGNATURES[name]:
+                raise ValueError(
+                    f"Critical tampered detected: Signature mismatch on asset '{name}'. "
+                    f"Expected [{GOLDEN_SIGNATURES[name]}], but calculated [{sig}]. Execution halted."
+                )
+            
             print(f"Verified: {repo_path} -> Cached at edge [SHA-256 SIG: {sig}]")
-
             #compiles the mathematical graph into memory using an Inference Session
             sessions[name]= ort.InferenceSession(local_cached_path)
 
