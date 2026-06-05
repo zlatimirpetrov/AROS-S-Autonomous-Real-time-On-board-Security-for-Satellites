@@ -6,6 +6,12 @@ I built AROS-S because defending a satellite from the ground doesn't really work
 
 Right now the system detects anomalies, raises alerts, and records everything to a flight log. The active response side (killing a rogue process, dropping the spacecraft into safe mode) is the next thing on my list rather than something that's already wired in. I've tried to be honest about that split in the roadmap below.
 
+## Demo
+
+https://github.com/user-attachments/assets/8d450139-d414-4765-a8ef-a941a61c188d
+
+> AROS-S flagging a simulated attack on satellite telemetry in real time — the two-layer detector (Isolation Forest + autoencoder) trips the moment the stream goes anomalous, on-board, with no round trip to the ground.
+
 ## Where things live
 
 - Model registry (Hugging Face): https://huggingface.co/zlatimirpetrov/aros-s-anomaly-detector
