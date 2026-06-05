@@ -1,170 +1,141 @@
 # AROS-S — Autonomous Real-time On-board Security for Satellites
 
-**Zlatimir Petrov · Cybersecurity Student · 2026**
+Zlatimir Petrov · Cybersecurity Student · 2026
 
-AROS-S is a lightweight, on-board anomaly-detection middleware for satellite payloads.
-Because the round-trip lag between a spacecraft and a ground station makes remote,
-real-time defence impractical, AROS-S runs **locally on the payload** and screens live
-telemetry for cyber-attack signatures (DoS-driven CPU spikes, abnormal power draw,
-slow sensor-spoofing campaigns) as the packets arrive.
+I built AROS-S because defending a satellite from the ground doesn't really work in real time. By the time suspicious telemetry reaches a ground station and someone reacts, the hardware could already be damaged. So instead of watching from Earth, AROS-S runs on the payload itself and screens the live telemetry stream as it comes in, looking for the fingerprints of an attack: DoS-style CPU spikes, abnormal power draw, or slower sensor-spoofing campaigns that build up over time.
 
-> **Status:** detection + alerting + flight-recorder logging are implemented.
-> Active mitigation (process termination / safe-mode transition) is on the roadmap —
-> see [Roadmap](#roadmap).
+Right now the system detects anomalies, raises alerts, and records everything to a flight log. The active response side (killing a rogue process, dropping the spacecraft into safe mode) is the next thing on my list rather than something that's already wired in. I've tried to be honest about that split in the roadmap below.
 
----
+## Where things live
 
-## Model registry
+- Model registry (Hugging Face): https://huggingface.co/zlatimirpetrov/aros-s-anomaly-detector
+- Telemetry storage bucket (Hugging Face): https://huggingface.co/buckets/zlatimirpetrov/aros-s-detector-storage
+- PyPI package: https://pypi.org/project/aros-s/
+- ML technical paper (Overleaf): https://www.overleaf.com/read/cjmdsczxpmyy#6d4d37
 
-* **Hugging Face model repo:** https://huggingface.co/zlatimirpetrov/aros-s-anomaly-detector
+The detector reads its models either from the local `models/` folder or straight from the Hugging Face registry above. Raw ground-station telemetry logs get synced to the storage bucket.
 
-The detector can run models from the local `models/` directory (default) or be pointed at
-the Hugging Face registry. See [Configuration](#configuration).
+## How the detection works
 
----
+AROS-S runs two detectors side by side. One reacts to sudden, obvious spikes; the other learns what "normal" looks like and notices when the shape of the data quietly drifts. Running both means a slow attack doesn't slip past the fast detector, and a sudden one doesn't hide inside the noise the slow detector tolerates.
 
-## Detection architecture
+### Layer 1 — Isolation Forests, split by subsystem
 
-AROS-S uses a **two-layer hybrid pipeline** so it catches both sudden point anomalies and
-slow, coordinated drift.
+Rather than throwing all five telemetry features into one model, I split them into two Isolation Forests so a big spike in one subsystem can't mask a small, deliberate change in another:
 
-### Layer 1 — Partitioned Isolation Forests
-Two independent Isolation Forests run on separate feature subspaces, which avoids
-"cross-channel masking" (a large compute spike hiding a small electrical siphon):
+- Electrical: `V_bus`, `I_total` — catches power-draining malware or a transmitter being driven too hard.
+- Computational: `CPU_load`, `RAM_usage`, `MCU_temp` — catches CPU-exhaustion / DoS behaviour.
 
-* **Electrical subspace** — `V_bus`, `I_total` (power-draining malware, transmitter overload)
-* **Computational subspace** — `CPU_load`, `RAM_usage`, `MCU_temp` (CPU-exhaustion / DoS)
+Each forest gives every packet a score (`-decision_function`); above its threshold, the packet is treated as anomalous.
 
-The per-packet anomaly score used by the detector is `-decision_function(x)`; a score above
-its threshold means the forest considers the packet anomalous.
+### Layer 2 — Bottleneck autoencoder
 
-### Layer 2 — Bottleneck Autoencoder
-A symmetric **5-3-5** `MLPRegressor` autoencoder (5 inputs → 3-neuron bottleneck → 5 outputs,
-**38 parameters**) learns the normal correlations between spacecraft state variables. When an
-adversary injects altered packets, reconstruction fails and the **Mean Squared Error spikes**
-above the alert threshold.
+The second layer is a small 5-3-5 autoencoder (five inputs squeezed through a three-neuron bottleneck and back out to five, about 38 parameters total). Trained only on normal telemetry, it gets good at rebuilding normal packets and bad at rebuilding tampered ones. When someone injects altered data, the reconstruction error (MSE) jumps and trips the alert. Keeping it this small is deliberate — it has to fit a payload's tight memory budget.
 
-A packet is flagged if **either** layer trips.
+A packet gets flagged if either layer fires.
 
-### Preprocessing
-All telemetry is normalized with a **`RobustScaler`** (median / IQR) so random sensor jitter
-doesn't shift the baseline. The *same* scaler is used in training, validation, and live
-inference — this consistency is essential (a scaler mismatch silently breaks detection).
+### Scaling and integrity
 
-### Integrity layer
-At boot, AROS-S computes a **SHA-256 checksum** of every model file and compares it against
-hardcoded `GOLDEN_SIGNATURES`. Any mismatch halts execution, blocking model-injection /
-tampering before the graphs are loaded.
+All telemetry is normalised with a `RobustScaler` (median / IQR), which shrugs off random sensor jitter better than a standard mean/std scaler. The same fitted scaler is used everywhere — training, validation, and live inference. That consistency matters more than it sounds: a mismatched scaler silently breaks detection, which is a mistake I made and had to chase down.
 
-### Inference engine
-Models are exported to **ONNX** and executed via **ONNX Runtime** (C++ backend) for
-low-latency inference suitable for a constrained payload.
+Before any model loads, AROS-S hashes each file with SHA-256 and checks it against a known-good `GOLDEN_SIGNATURES` table. If a hash doesn't match, it refuses to start, which blocks a swapped-in or tampered model from ever running.
 
----
+Inference runs through ONNX Runtime (C++ under the hood) so the models stay fast on constrained hardware.
 
-## Repository layout
+## Installing
 
-```
-src/
-  prepare_data.py      # generate baseline nominal telemetry + fit RobustScaler
-  nasa_smap_raw.py     # generate sample NASA SMAP-style raw data
-  nasa_adapter.py      # map NASA SMAP fields -> AROS-S 5 features
-  train_model.py       # train the two Isolation Forests
-  train_autoencoder.py # train the 5-3-5 autoencoder
-  recalibrate.py       # retrain everything on nominal + NASA regimes, print thresholds
-  convert_to_onnx.py   # export all .joblib models -> .onnx
-  live_detector.py     # the on-board detector (UDP/CSV ingest, scoring, logging)
-  bus_handler.py       # telemetry bus (UDP socket / CSV replay)
-  main.py              # entry point -> start_monitor()
-  satellite_sim.py     # stream attack telemetry over UDP (red-team sim)
-  nasa_sim.py          # stream NASA-derived telemetry over UDP (nominal sim)
-  attack_sim.py        # synthesize labelled attack telemetry
-models/                # scaler + 2 forests + autoencoder  (.joblib and .onnx)
-data/                  # generated telemetry CSVs
-logs/                  # mission_log_*.csv flight recordings
-```
+The package is on PyPI:
 
----
-
-## How to start
-
-### 1. Install
 ```bash
-git clone <your-repo-url>
+pip install aros-s==0.1.2
+```
+
+That gives you the library. To actually run the detector with the simulators and your own config, clone the repo:
+
+```bash
+git clone https://github.com/zlatimirpetrov/AROS-S-Autonomous-Real-time-On-board-Security-for-Satellites
 cd AROS-S
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Build the data and models
-If the `models/` folder is not present in the repo, generate it:
-```bash
-python src/prepare_data.py        # baseline nominal data + scaler
-python src/nasa_smap_raw.py       # sample NASA SMAP data
-python src/recalibrate.py         # train scaler + forests + autoencoder on BOTH regimes
-python src/convert_to_onnx.py     # export models to ONNX
-```
-`recalibrate.py` prints suggested detection thresholds (99th percentile of normal scores).
+## Getting it running
 
-### 3. Set the thresholds and integrity hashes
-In `src/live_detector.py`:
-* paste the thresholds printed by `recalibrate.py` into `ELEC_THR`, `COMP_THR`, `MSE_THR`
-  (current working values: `0.03`, `0.025`, `0.95`)
-* refresh `GOLDEN_SIGNATURES` with the hashes of your ONNX files:
+If the trained models aren't already in `models/`, build them first:
+
+```bash
+python src/prepare_data.py        # baseline nominal telemetry + fits the scaler
+python src/nasa_smap_raw.py       # sample NASA SMAP data
+python src/recalibrate.py         # trains scaler + both forests + autoencoder on nominal AND NASA data
+python src/convert_to_onnx.py     # exports everything to ONNX
+```
+
+`recalibrate.py` prints suggested thresholds (the 99th percentile of normal scores) when it finishes. Drop those into `ELEC_THR`, `COMP_THR`, and `MSE_THR` in `live_detector.py` — the values I'm currently running are `0.03`, `0.025`, and `0.95`. Then refresh the integrity hashes so they match your freshly built ONNX files:
+
 ```bash
 python -c "import hashlib;[print(n, hashlib.sha256(open(f'models/{f}','rb').read()).hexdigest()[:8]) for n,f in [('scaler','scaler.onnx'),('elec','model_electrical.onnx'),('comp','model_computational.onnx'),('auto','model_autoencoder.onnx')]]"
 ```
 
-### 4. Run the detector
-In one terminal, start the on-board monitor (listens on UDP `5005`):
+Paste those four values into `GOLDEN_SIGNATURES` in `live_detector.py`.
+
+Now start the monitor in one terminal:
+
 ```bash
 python -m src.main
 ```
-In a second terminal, stream telemetry to it:
+
+and feed it telemetry from another:
+
 ```bash
-python -m src.nasa_sim        # nominal NASA-derived stream -> should read "Nominal"
-python -m src.satellite_sim   # red-team attack stream      -> should flag anomalies
+python -m src.nasa_sim        # normal NASA-derived stream — should stay "Nominal"
+python -m src.satellite_sim   # attack stream — should light up with anomalies
 ```
-Detections print live and are written to `logs/mission_log_<timestamp>.csv`.
 
----
+Everything the detector sees is printed live and written to `logs/mission_log_<timestamp>.csv`.
 
-## Configuration
+## Network configuration (.env)
 
-| Setting | Location | Notes |
-|---|---|---|
-| `ELEC_THR`, `COMP_THR`, `MSE_THR` | `live_detector.py` | Re-derive after every recalibration |
-| `GOLDEN_SIGNATURES` | `live_detector.py` | Must match the ONNX files actually loaded |
-| Model source | `live_detector.py` | `local_cached_path = repo_path` loads local `models/`; swap to `hf_hub_download(...)` to pull from the HF registry |
-| UDP host/port | `.env` | `AROS_DETECTOR_HOST`, `AROS_DETECTOR_PORT` (default `127.0.0.1:5005`) |
+The detector and the simulators talk over UDP, and they both read the target address from a `.env` file in the project root:
 
-> **Important:** thresholds and `GOLDEN_SIGNATURES` are tied to a specific trained model.
-> Whenever you recalibrate, you must re-export ONNX, recompute hashes, and re-derive thresholds,
-> or the detector will either halt on the integrity check or score on the wrong scale.
+```
+AROS_DETECTOR_HOST=127.0.0.1
+AROS_DETECTOR_PORT=5005
+```
 
----
+For everything running on your own machine, `127.0.0.1` (localhost) is what you want, and `5005` is the default port. You'll need to set these yourself — find your local address and the port you want to use, and put them here.
+
+It gets a bit different once the detector runs inside a container. If you launch it under Podman (or Docker), `127.0.0.1` on the host won't reach the detector inside the container. Two ways around it:
+
+- Publish the port when you start the container (`podman run -p 5005:5005/udp ...`) and keep `AROS_DETECTOR_HOST=127.0.0.1`. Easiest option.
+- Or find the container's own IP and use that. From inside the container `hostname -I`, or from the host:
+
+  ```bash
+  podman inspect -f '{{.NetworkSettings.IPAddress}}' <container_name>
+  ```
+
+  then set `AROS_DETECTOR_HOST` to that address.
+
+Whichever you pick, the simulators have to point at the same host and port the detector is bound to, or the packets just go nowhere.
+
+## Choosing where models come from
+
+In `live_detector.py`, the loader can pull models from the local folder or from Hugging Face. Loading locally is the line `local_cached_path = repo_path`; swapping it for `hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)` pulls the published models from the registry instead. Whichever you use, the `GOLDEN_SIGNATURES` have to match those exact files.
+
+One thing worth remembering: thresholds and signatures are tied to a specific trained model. Every time you recalibrate, re-export the ONNX, recompute the hashes, and re-derive the thresholds — otherwise the detector either refuses to boot or scores against the wrong scale.
 
 ## Calibration
 
-The models are recalibrated against both the synthetic nominal regime and **NASA SMAP-derived
-telemetry**, so normal orbital noise and the NASA operating ranges are learned as nominal.
-Detection thresholds are set from the **99th percentile of the normal score distribution**
-rather than hand-tuned, which keeps the false-alarm rate low while preserving attack
-sensitivity (injected attacks score far above the threshold).
-
----
+The models are trained against both my synthetic nominal data and NASA SMAP-derived telemetry, so the normal orbital ranges and noise are learned as expected behaviour rather than mistaken for attacks. I set the thresholds from the 99th percentile of the normal score distribution instead of hand-picking numbers, which keeps false alarms low while leaving plenty of headroom for real attacks (which score far, far above the line). There's more tuning I want to do here against longer datasets, but the current calibration holds up cleanly on both simulators.
 
 ## Roadmap
 
-- [x] Core hybrid ML pipeline (`src/`, dual Isolation Forests + autoencoder)
+- [x] Two-layer ML pipeline (dual Isolation Forests + autoencoder)
 - [x] Live UDP telemetry ingestion
-- [x] NASA SMAP calibration + percentile-based thresholds
-- [x] ONNX export + SHA-256 integrity layer
-- [ ] Active mitigation (process termination / safe-mode transition)
-- [ ] Container hardening (rootless runtime, read-only FS, cgroup limits) — `Dockerfile` provided
-- [ ] Continuous re-calibration against extended orbital datasets
-
----
+- [x] NASA SMAP calibration with percentile-based thresholds
+- [x] ONNX export and SHA-256 integrity checking
+- [ ] Active response (process termination / safe-mode transition)
+- [ ] Container hardening — rootless runtime, read-only filesystem, cgroup limits (Dockerfile included)
+- [ ] Ongoing recalibration against larger orbital datasets
 
 ## License
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aros-s"
-version = "0.1.1"
+version = "0.1.2"
 description = "AROS-S Satellite Autonomous Telemetry Security Anomaly Detector"
 dependencies = [
     "pandas",
