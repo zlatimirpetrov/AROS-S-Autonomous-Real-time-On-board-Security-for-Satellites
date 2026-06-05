@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aros-s"
-version = "0.1.0"
-description = "AROS-S Satellite Security Project"
+version = "0.1.1"
+description = "AROS-S Satellite Autonomous Telemetry Security Anomaly Detector"
 dependencies = [
     "pandas",
     "numpy",
@@ -13,3 +13,6 @@ dependencies = [
     "scikit-learn",
     "huggingface_hub"
 ]
+
+[project.urls]
+Repository = "https://github.com/zlatimirpetrov/AROS-S-Autonomous-Real-time-On-board-Security-for-Satellites"

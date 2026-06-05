@@ -1,15 +1,19 @@
-import pandas as pd
-import numpy as np
+import sys
+from src.live_detector import start_monitor
 
-def start_engine():
-    print("=========================================")
-    print("AROS-S Starting...")
-    print("Loading dependencies...")
+def main():
+    print("==================================================")
+    print("AROS-S Autonomous Security")
+    print("==================================================")
     
-    test_array = np.array([1, 2, 3])
-    print(f"NumPy is active. Test array: {test_array}")
-    print("=========================================")
-    print("Waiting for satellite telemetry...")
+    try:
+        start_monitor(mode='UDP')
+    except KeyboardInterrupt:
+        print("\nAROS-S shutdown sequence initiated by Ground Control.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n[CRITICAL] System failure: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    start_engine()
+    main()

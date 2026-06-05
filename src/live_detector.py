@@ -6,7 +6,7 @@ import hashlib
 import numpy as np
 import pandas as pd
 import onnxruntime as ort
-from bus_handler import TelemetryBus
+from src.bus_handler import TelemetryBus
 from huggingface_hub import hf_hub_download
 
 LOG_DIR="logs"
@@ -24,13 +24,16 @@ MODEL_FILES = {
     'auto': 'models/model_autoencoder.onnx'
 }
 
-#replace these strings with your models' true short hashes after your first clean execution
 GOLDEN_SIGNATURES = {
-    'scaler': 'c6bbacd6',
-    'elec': 'fd3416bc',
-    'comp': '739dadce',
-    'auto': 'e05e050f'
+    'scaler':'8990e325',
+    'elec': 'd6bd510a',
+    'comp': 'c4ededc3',
+    'auto': '609cfd7f'
 }
+
+ELEC_THR = 0.03
+COMP_THR = 0.025
+MSE_THR  = 0.95
 
 def get_file_hash(path):
     """
@@ -66,7 +69,11 @@ def start_monitor(mode='UDP'):
     try:
         for name,repo_path in MODEL_FILES.items():
             #downloads/locates the file via the HF API cache mechanism
-            local_cached_path = hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)
+            try:
+                local_cached_path=hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)
+            except Exception as e:
+                print(f"  HF unavailable ({e}); falling back to local {repo_path}")
+                local_cached_path = repo_path
 
             sig=get_file_hash(local_cached_path)[:8]
             
@@ -121,13 +128,14 @@ def start_monitor(mode='UDP'):
         auto_input_matrix = packet_scaled.to_numpy().astype(np.float32)
         #run data through the Autoencoder compression/decompression neural graph
         reconstruction = s_auto.run(None, {s_auto.get_inputs()[0].name: auto_input_matrix})[0]
+        reconstruction = np.asarray(reconstruction).reshape(packet_scaled.shape)  #onnx returns (n*5,1) -> (n,5)
         
         mse = float(((packet_scaled.values - reconstruction) ** 2).mean())
 
         #hybrid threshold logic, if either layer flags an issue, trigger the alert
         #tuned to catch the +0.080 and +0.000 signatures seen in the live run
-        is_forest_anomaly=(e_score>0.05 or c_score>-0.01)
-        is_neural_anomaly=(mse > 0.2) #0.2 is a strict threshold for reconstruction error
+        is_forest_anomaly = (e_score > ELEC_THR or c_score > COMP_THR)
+        is_neural_anomaly = (mse > MSE_THR)
 
         if is_forest_anomaly or is_neural_anomaly:
             status="! Detected anomaly !"

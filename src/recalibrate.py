@@ -1,10 +1,13 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.neural_network import MLPRegressor
 from sklearn.ensemble import IsolationForest
 import joblib
 import os
+from nasa_adapter import transform_smap_to_aros
+
+FEATURES = ['V_bus', 'I_total', 'CPU_load', 'RAM_usage', 'MCU_temp']
 
 def recalibrate_brain():
     print("Initiating calibration sequence...")
@@ -12,65 +15,55 @@ def recalibrate_brain():
     if not os.path.exists('data/raw_telemetry.csv'):
         print("Error: data/raw_telemetry.csv missing.")
         return
-
-    #original clean data
-    clean_data=pd.read_csv('data/raw_telemetry.csv')
-
-    #space noise script
-    nasa_logs='logs/mission_log_20260601_172452.csv'
-    if not os.path.exists(nasa_logs):
-        print(f"Error: {nasa_logs} missing. Update the filename in the script.")
+    if not os.path.exists('data/nasa_smap_raw.csv'):
+        print("Error: data/nasa_smap_raw.csv missing. Run nasa_smap_raw.py first.")
         return
 
-    nasa_logs_df = pd.read_csv(nasa_logs)
+    #original clean data
+    clean_data=pd.read_csv('data/raw_telemetry.csv')[FEATURES]
+    nasa_clean = transform_smap_to_aros(pd.read_csv('data/nasa_smap_raw.csv'))[FEATURES]
 
-    #filter the log to only include the raw telemetry columns
-    nasa_clean = nasa_logs_df[['V_bus', 'I_total', 'CPU_load', 'RAM_usage', 'MCU_temp']]
+    combined = pd.concat([clean_data, nasa_clean], ignore_index=True)
+    print(f"Combined dataset: {len(combined)} packets "
+          f"({len(clean_data)} nominal + {len(nasa_clean)} NASA).")
 
-    #the ml model will re learn that both nasa and stablility noise are normal behaviour 
-    combined_training=pd.concat([clean_data, nasa_clean], ignore_index=True)
-    print(f"Combined dataset ready: {len(combined_training)} total packets.")
 
-    #refit the scaler 
-    scaler= StandardScaler()
-    scaled_data= scaler.fit_transform(combined_training)
-    scaled_df = pd.DataFrame(scaled_data, columns=combined_training.columns)
-
-    #save the new scaler
+    #refit the scaler consistent with prepare_data.py / train_model.py
+    scaler = RobustScaler()
+    scaled = pd.DataFrame(scaler.fit_transform(combined), columns=FEATURES)
     joblib.dump(scaler, 'models/scaler.joblib')
     print("New feature scaler saved.")
+
 
     #Isolation forest- electrical layer
     print("Training electrical isolation forest...")
     model_electrical = IsolationForest(contamination=0.01, random_state=42)
-    model_electrical.fit(scaled_df[['V_bus', 'I_total']])
+    model_electrical.fit(scaled[['V_bus', 'I_total']])
     joblib.dump(model_electrical, 'models/model_electrical.joblib')
     print("-> Saved updated model_electrical.joblib")
 
     #Isolation forest, computational layer
     print("Training computational isolation forest...")
     model_computational = IsolationForest(contamination=0.01, random_state=42)
-    model_computational.fit(scaled_df[['CPU_load', 'RAM_usage', 'MCU_temp']])
+    model_computational.fit(scaled[['CPU_load', 'RAM_usage', 'MCU_temp']])
     joblib.dump(model_computational, 'models/model_computational.joblib')
     print("-> Saved updated model_computational.joblib")
 
     #define the Autoencoder
-    nn_model = MLPRegressor(
-        hidden_layer_sizes=(16, 8, 16),  #upgraded brain capacity
-        activation='relu',
-        solver='adam',
-        max_iter=1500,
-        random_state=42,
-        early_stopping=False 
-    )
+    nn = MLPRegressor(hidden_layer_sizes=(3,), activation='relu', solver='adam',
+                      max_iter=1500, random_state=42, early_stopping=False)
+    nn.fit(scaled, scaled)
+    joblib.dump(nn, 'models/model_autoencoder.joblib')
+    print("Success: calibrated neural layer saved.")
 
-    #train the brain to reconstruct both perfect data and nasa noise
-    print("Training neural layer... this may take a moment.")
-    nn_model.fit(scaled_df, scaled_df)
-
-    #overwrite the old brain
-    joblib.dump(nn_model, 'models/model_autoencoder.joblib')
-    print("Success: calibrated Neural Layer saved to models/model_autoencoder.joblib")
+    e = -model_electrical.decision_function(scaled[['V_bus', 'I_total']])
+    c = -model_computational.decision_function(scaled[['CPU_load', 'RAM_usage', 'MCU_temp']])
+    recon = nn.predict(scaled)
+    mse = ((scaled.values - recon) ** 2).mean(axis=1)
+    print("\n=== Suggested thresholds (99th percentile of NORMAL) ===")
+    print(f"  elec > {np.percentile(e, 99):+.4f}")
+    print(f"  comp > {np.percentile(c, 99):+.4f}")
+    print(f"  mse  > {np.percentile(mse, 99):.4f}")
 
 if __name__ == "__main__":
     recalibrate_brain()
