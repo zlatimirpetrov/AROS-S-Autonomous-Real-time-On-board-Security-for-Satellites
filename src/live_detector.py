@@ -40,6 +40,10 @@ MSE_THR  = 0.95
 W = 10 
 TEMP_THR = 6.9042
 
+def top_feature(values,names):
+    i=int(np.argmax(values))
+    return names[i], float(values[i])
+
 def get_file_hash(path):
     """
     generates SHA-256 checksum for model verification
@@ -169,9 +173,29 @@ def start_monitor(mode='UDP'):
             marker="---"
             source="System"
 
+        cause = "-"
+        cause_val = 0.0
+        if source == "Neural Net":
+            #per-feature reconstruction error
+            per_feat = ((packet_scaled.values - reconstruction) ** 2).ravel() # shape (5,)
+            cause, cause_val = top_feature(per_feat, feature_order)
+
+        elif source == "Forest":
+            #subsystem that fired, then its most-deviated feature
+            sub = ['V_bus', 'I_total'] if e_score > ELEC_THR else ['CPU_load', 'RAM_usage', 'MCU_temp']
+            dev = packet_scaled[sub].abs().values.ravel()
+            cause, cause_val = top_feature(dev, sub)
+
+        elif source == "Temporal" and len(window_buf) == W:
+            w2 = win.reshape(W, 5)
+            r2 = t_recon.reshape(W, 5)
+            per_feat = ((w2 - r2) ** 2).mean(axis=0)   # shape (5,)
+            cause, cause_val = top_feature(per_feat, feature_order)
+
         #formatted telemetry Log
         timestamp = time.strftime("%H:%M:%S")
-        print(f"{marker} {timestamp} | Pkt:{i:03} | Status: {status} [{source}]")
+        detail = f" ({cause})" if status != "Nominal" else ""
+        print(f"{marker} {timestamp} | Pkt:{i:03} | Status: {status} [{source}]{detail}")
         print(f"    [Scores] Elec: {e_score:+.3f} | Comp: {c_score:+.3f} | NN-MSE: {mse:.4f} | Temp-MSE: {t_mse:.4f}")
 
         #persistence: save to flight recorder
@@ -183,6 +207,8 @@ def start_monitor(mode='UDP'):
             'comp_score': round(c_score, 4),
             'nn_mse': round(mse, 4),
             'temp_mse': round(t_mse, 4),
+            'cause': cause,
+            'cause_score': round(cause_val, 4),
             'status': status,
             'source': source
         })
