@@ -23,7 +23,7 @@ The detector reads its models either from the local `models/` folder or straight
 
 ## How the detection works
 
-AROS-S runs two detectors side by side. One reacts to sudden, obvious spikes; the other learns what "normal" looks like and notices when the shape of the data quietly drifts. Running both means a slow attack doesn't slip past the fast detector, and a sudden one doesn't hide inside the noise the slow detector tolerates.
+AROS-S runs three detectors side by side. The first reacts to sudden, obvious spikes. The second learns what a normal packet looks like and catches ones that break the usual relationships between features. The third watches a short window of packets and catches slow drift that never makes any single packet look wrong. Together they cover fast attacks, corrupted packets, and slow, patient campaigns.
 
 ### Layer 1 — Isolation Forests, split by subsystem
 
@@ -38,7 +38,11 @@ Each forest gives every packet a score (`-decision_function`); above its thresho
 
 The second layer is a small 5-3-5 autoencoder (five inputs squeezed through a three-neuron bottleneck and back out to five, about 38 parameters total). Trained only on normal telemetry, it gets good at rebuilding normal packets and bad at rebuilding tampered ones. When someone injects altered data, the reconstruction error (MSE) jumps and trips the alert. Keeping it this small is deliberate — it has to fit a payload's tight memory budget.
 
-A packet gets flagged if either layer fires.
+### Layer 3 — Temporal window autoencoder
+
+The first two layers look at one packet at a time, so a patient attacker who nudges telemetry gradually — a slow memory leak, for example — can stay inside the normal range on every individual packet and slip past both. The third layer closes that gap. It feeds a sliding window of the last 10 packets into a second small autoencoder (50 inputs → 8 → 50) and scores how well it rebuilds the whole window. A gradual trend is a *shape* that normal windows never have, so the window reconstructs badly and the error spikes — even though no single feature ever left its range. In testing, this layer catches the slow memory-leak attack that both Layer 1 and Layer 2 miss completely.
+
+A packet gets flagged if any layer fires.
 
 ### Scaling and integrity
 
@@ -135,7 +139,8 @@ The models are trained against both my synthetic nominal data and NASA SMAP-deri
 
 ## Roadmap
 
-- [x] Two-layer ML pipeline (dual Isolation Forests + autoencoder)
+- [x] Three-layer ML pipeline (dual Isolation Forests + per-packet autoencoder + temporal window autoencoder)
+- [x] Temporal layer for slow-drift detection (catches gradual attacks the per-packet layers miss)
 - [x] Live UDP telemetry ingestion
 - [x] NASA SMAP calibration with percentile-based thresholds
 - [x] ONNX export and SHA-256 integrity checking
