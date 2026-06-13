@@ -6,6 +6,7 @@ import hashlib
 import numpy as np
 import pandas as pd
 import onnxruntime as ort
+from collections import deque
 from src.bus_handler import TelemetryBus
 from huggingface_hub import hf_hub_download
 
@@ -21,19 +22,23 @@ MODEL_FILES = {
     'scaler': 'models/scaler.onnx',
     'elec': 'models/model_electrical.onnx',
     'comp': 'models/model_computational.onnx',
-    'auto': 'models/model_autoencoder.onnx'
+    'auto': 'models/model_autoencoder.onnx',
+    'temporal': 'models/model_temporal.onnx'
 }
 
 GOLDEN_SIGNATURES = {
-    'scaler':'8990e325',
-    'elec': 'd6bd510a',
-    'comp': 'c4ededc3',
-    'auto': '609cfd7f'
+    'scaler':'83ff664d',
+    'elec': '7f52d595',
+    'comp': '43402561',
+    'auto': 'f6fcfc9f',
+    'temporal': 'ee6c4ac8'  
 }
 
 ELEC_THR = 0.03
 COMP_THR = 0.025
 MSE_THR  = 0.95
+W = 10 
+TEMP_THR = 6.9042
 
 def get_file_hash(path):
     """
@@ -68,12 +73,11 @@ def start_monitor(mode='UDP'):
     #integrity loading, verify files exists and log their unique signatures for the mission log
     try:
         for name,repo_path in MODEL_FILES.items():
-            #downloads/locates the file via the HF API cache mechanism
-            try:
-                local_cached_path=hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)
-            except Exception as e:
-                print(f"  HF unavailable ({e}); falling back to local {repo_path}")
+            #prefer the local on-board copy; fall back to the HF registry only if absent
+            if os.path.exists(repo_path):
                 local_cached_path = repo_path
+            else:
+                local_cached_path = hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)
 
             sig=get_file_hash(local_cached_path)[:8]
             
@@ -98,6 +102,9 @@ def start_monitor(mode='UDP'):
     s_elec = sessions['elec']
     s_comp = sessions['comp']
     s_auto = sessions['auto']
+    s_temporal = sessions['temporal']
+
+    window_buf = deque(maxlen=W)   #rolling buffer of the last W scaled packets
 
     bus = TelemetryBus(mode=mode)
     print(f"AROS-S: {mode} stream active. Listening for packets...")
@@ -132,19 +139,31 @@ def start_monitor(mode='UDP'):
         
         mse = float(((packet_scaled.values - reconstruction) ** 2).mean())
 
-        #hybrid threshold logic, if either layer flags an issue, trigger the alert
-        #tuned to catch the +0.080 and +0.000 signatures seen in the live run
+        #Layer 3: temporal window autoencoder (detects slow, coordinated drift)
+        window_buf.append(packet_scaled.to_numpy().astype(np.float32).reshape(-1))  # (5,)
+        is_temporal_anomaly = False
+        t_mse = 0.0
+        if len(window_buf) == W:
+            win = np.concatenate(list(window_buf)).reshape(1, -1).astype(np.float32)  #(1, W*5)
+            t_recon = s_temporal.run(None, {s_temporal.get_inputs()[0].name: win})[0]
+            t_recon = np.asarray(t_recon).reshape(win.shape)   #(n*W*5,1) -> (n, W*5)
+            t_mse = float(((win - t_recon) ** 2).mean())
+            is_temporal_anomaly = (t_mse > TEMP_THR)
+
+        #hybrid threshold logic, if any layer flags an issue, trigger the alert
         is_forest_anomaly = (e_score > ELEC_THR or c_score > COMP_THR)
         is_neural_anomaly = (mse > MSE_THR)
 
-        if is_forest_anomaly or is_neural_anomaly:
+        if is_forest_anomaly or is_neural_anomaly or is_temporal_anomaly:
             status="! Detected anomaly !"
             marker="[!]"
             #identify which layer triggered the alarm
             if is_forest_anomaly:
-                source= "Forest" 
-            else:
+                source= "Forest"
+            elif is_neural_anomaly:
                 source="Neural Net"
+            else:
+                source="Temporal"
         else:
             status="Nominal"
             marker="---"
@@ -153,7 +172,7 @@ def start_monitor(mode='UDP'):
         #formatted telemetry Log
         timestamp = time.strftime("%H:%M:%S")
         print(f"{marker} {timestamp} | Pkt:{i:03} | Status: {status} [{source}]")
-        print(f"    [Scores] Elec: {e_score:+.3f} | Comp: {c_score:+.3f} | NN-MSE: {mse:.4f}")
+        print(f"    [Scores] Elec: {e_score:+.3f} | Comp: {c_score:+.3f} | NN-MSE: {mse:.4f} | Temp-MSE: {t_mse:.4f}")
 
         #persistence: save to flight recorder
         log_entry = packet.iloc[0].to_dict()
@@ -163,6 +182,7 @@ def start_monitor(mode='UDP'):
             'elec_score': round(e_score, 4),
             'comp_score': round(c_score, 4),
             'nn_mse': round(mse, 4),
+            'temp_mse': round(t_mse, 4),
             'status': status,
             'source': source
         })
