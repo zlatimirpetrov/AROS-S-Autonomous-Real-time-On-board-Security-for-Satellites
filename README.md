@@ -4,13 +4,13 @@ Zlatimir Petrov · Cybersecurity Student · 2026
 
 I built AROS-S because defending a satellite from the ground doesn't really work in real time. By the time suspicious telemetry reaches a ground station and someone reacts, the hardware could already be damaged. So instead of watching from Earth, AROS-S runs on the payload itself and screens the live telemetry stream as it comes in, looking for the fingerprints of an attack: DoS-style CPU spikes, abnormal power draw, or slower sensor-spoofing campaigns that build up over time.
 
-Right now the system detects anomalies, raises alerts, and records everything to a flight log. The active response side (killing a rogue process, dropping the spacecraft into safe mode) is the next thing on my list rather than something that's already wired in. I've tried to be honest about that split in the roadmap below.
+The system detects anomalies, explains which feature drove each one, raises alerts, and records everything to a flight log. It can also respond: when an attack persists, AROS-S sends an authenticated command back to the spacecraft to contain it and then verifies recovery — a simulated closed loop you can toggle on or off. I've kept an honest split between what's implemented and what's still ahead in the roadmap below.
 
 ## Demo
 
 https://github.com/user-attachments/assets/8d450139-d414-4765-a8ef-a941a61c188d
 
-> AROS-S flagging a simulated attack on satellite telemetry in real time — the two-layer detector (Isolation Forest + autoencoder) trips the moment the stream goes anomalous, on-board, with no round trip to the ground.
+> AROS-S flagging a simulated attack on satellite telemetry in real time — the three-layer detector (Isolation Forests + per-packet autoencoder + temporal window) trips the moment the stream goes anomalous, on-board, with no round trip to the ground.
 
 ## Where things live
 
@@ -52,6 +52,27 @@ Before any model loads, AROS-S hashes each file with SHA-256 and checks it again
 
 Inference runs through ONNX Runtime (C++ under the hood) so the models stay fast on constrained hardware.
 
+## Responding to attacks
+
+Detection on its own is only half the job — the whole point of running on the payload is to *act* before the ground could. When AROS-S sees an anomaly persist (three packets in a row, not a single blip, so a one-off false positive can't trip it), it issues a response, watches whether the spacecraft recovers, and escalates if it doesn't.
+
+The response is **proportionate to the threat** — it matches the layer that caught it rather than always slamming the platform into safe-mode:
+
+- electrical anomaly (Forest) → isolate the affected power load
+- compute corruption (autoencoder) → terminate the offending process
+- slow drift (temporal) → safe-mode transition
+
+Commands go back to the spacecraft over an **authenticated channel**: every command is HMAC-SHA256 signed and timestamped, so a spoofed or replayed command — which would itself be a denial-of-service if it forced safe-mode — is rejected. After acting, AROS-S verifies recovery: if telemetry returns to nominal it confirms the fix; if it's still anomalous after a grace window, it escalates to safe-mode.
+
+The responder is a clean kill-switch — run pure detect-and-log, or the full closed loop:
+
+```bash
+python -m src.main --mitigation off   # detect and log only
+python -m src.main --mitigation on    # full closed-loop response
+```
+
+(or set `AROS_MITIGATION` in `.env`; the CLI flag overrides it). When off, the responder is a no-op and nothing else in the pipeline changes. This is a *simulated* closed loop — on a real payload the command would signal the flight software; here it commands the spacecraft simulator, which authenticates it and returns to a safe state.
+
 ## Installing
 
 The package is on PyPI:
@@ -76,17 +97,18 @@ If the trained models aren't already in `models/`, build them first:
 ```bash
 python src/prepare_data.py        # baseline nominal telemetry + fits the scaler
 python src/nasa_smap_raw.py       # sample NASA SMAP data
-python src/recalibrate.py         # trains scaler + both forests + autoencoder on nominal AND NASA data
-python src/convert_to_onnx.py     # exports everything to ONNX
+python src/recalibrate.py         # trains scaler + both forests + per-packet autoencoder on nominal AND NASA data
+python src/train_temporal.py      # trains the Layer 3 temporal-window autoencoder (+ derives TEMP_THR)
+python src/convert_to_onnx.py     # exports everything (all five models) to ONNX
 ```
 
-`recalibrate.py` prints suggested thresholds (the 99th percentile of normal scores) when it finishes. Drop those into `ELEC_THR`, `COMP_THR`, and `MSE_THR` in `live_detector.py` — the values I'm currently running are `0.03`, `0.025`, and `0.95`. Then refresh the integrity hashes so they match your freshly built ONNX files:
+`recalibrate.py` prints suggested thresholds (the 99th percentile of normal scores) for the first three layers when it finishes. Drop those into `ELEC_THR`, `COMP_THR`, and `MSE_THR` in `live_detector.py` — the values I'm currently running are `0.03`, `0.025`, and `0.95`. `train_temporal.py` prints the temporal threshold the same way; drop it into `TEMP_THR` (currently `6.9`). Then refresh the integrity hashes so they match your freshly built ONNX files:
 
 ```bash
-python -c "import hashlib;[print(n, hashlib.sha256(open(f'models/{f}','rb').read()).hexdigest()[:8]) for n,f in [('scaler','scaler.onnx'),('elec','model_electrical.onnx'),('comp','model_computational.onnx'),('auto','model_autoencoder.onnx')]]"
+python -c "import hashlib;[print(n, hashlib.sha256(open(f'models/{f}','rb').read()).hexdigest()[:8]) for n,f in [('scaler','scaler.onnx'),('elec','model_electrical.onnx'),('comp','model_computational.onnx'),('auto','model_autoencoder.onnx'),('temporal','model_temporal.onnx')]]"
 ```
 
-Paste those four values into `GOLDEN_SIGNATURES` in `live_detector.py`.
+Paste those five values into `GOLDEN_SIGNATURES` in `live_detector.py` (or just run `python src/refresh_signatures.py`, which recomputes all of them in place).
 
 Now start the monitor in one terminal:
 
@@ -144,7 +166,7 @@ The models are trained against both my synthetic nominal data and NASA SMAP-deri
 - [x] Live UDP telemetry ingestion
 - [x] NASA SMAP calibration with percentile-based thresholds
 - [x] ONNX export and SHA-256 integrity checking
-- [ ] Active response (process termination / safe-mode transition)
+- [x] Autonomous response — proportionate, HMAC-authenticated commands with recovery verification (simulated closed loop, toggleable)
 - [ ] Container hardening — rootless runtime, read-only filesystem, cgroup limits (Dockerfile included)
 - [ ] Ongoing recalibration against larger orbital datasets
 
