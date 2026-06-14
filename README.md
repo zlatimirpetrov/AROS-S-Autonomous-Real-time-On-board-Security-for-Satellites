@@ -149,6 +149,32 @@ It gets a bit different once the detector runs inside a container. If you launch
 
 Whichever you pick, the simulators have to point at the same host and port the detector is bound to, or the packets just go nowhere.
 
+## Running hardened (container)
+
+For a deployment-like run, AROS-S ships a Dockerfile and a `run.sh` (plus a `run.ps1` for Windows) that start it under Podman with the security controls a payload process should have. Build once:
+
+```bash
+podman build -t aros-s .
+```
+
+then run it hardened:
+
+```bash
+./run.sh                   # mitigation on (default)
+./run.sh --mitigation off  # detect-and-log only
+```
+
+On Windows the equivalent is `.\run.ps1` / `.\run.ps1 --mitigation off`.
+
+What the wrapper enforces, and why:
+
+- **Rootless + non-root** — Podman runs without a root daemon, and the process inside drops to an unprivileged user (`USER satellite_user`). Two layers, not one.
+- **Read-only root filesystem** (`--read-only`) — the image can't be modified at runtime. The only writable spots are tmpfs mounts for `/tmp` and `/app/logs`, so the flight log still works while everything else stays immutable. This pairs with the SHA-256 integrity gate: the gate *detects* a swapped model, read-only *prevents* the swap in the first place.
+- **No capabilities** (`--cap-drop=ALL`, `--security-opt=no-new-privileges`) — the detector only reads files and opens a UDP socket, so it needs zero Linux capabilities and can't escalate privileges.
+- **cgroup limits** (`--memory=256m --cpus=0.5 --pids-limit=64`) — caps worst-case resource use. The detector runs comfortably inside this budget (~105 MB, low CPU), and the same caps bound the CPU-exhaustion attack class AROS-S itself detects: even if something got loose inside the container, it can't starve the host.
+
+One networking note: when the container runs the response loop, it has to reach the spacecraft simulator on the host, so `run.sh` sets `AROS_CMD_HOST=host.containers.internal` and publishes the telemetry port with `-p 5005:5005/udp`. Inside a container, `127.0.0.1` means the container itself, not your machine.
+
 ## Choosing where models come from
 
 In `live_detector.py`, the loader can pull models from the local folder or from Hugging Face. Loading locally is the line `local_cached_path = repo_path`; swapping it for `hf_hub_download(repo_id=HF_REPO_ID, filename=repo_path)` pulls the published models from the registry instead. Whichever you use, the `GOLDEN_SIGNATURES` have to match those exact files.
@@ -167,7 +193,7 @@ The models are trained against both my synthetic nominal data and NASA SMAP-deri
 - [x] NASA SMAP calibration with percentile-based thresholds
 - [x] ONNX export and SHA-256 integrity checking
 - [x] Autonomous response — proportionate, HMAC-authenticated commands with recovery verification (simulated closed loop, toggleable)
-- [ ] Container hardening — rootless runtime, read-only filesystem, cgroup limits (Dockerfile included)
+- [x] Container hardening — rootless runtime, read-only filesystem, cgroup limits, dropped capabilities (Dockerfile + run.sh / run.ps1 included)
 - [ ] Ongoing recalibration against larger orbital datasets
 
 ## License
