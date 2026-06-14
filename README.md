@@ -78,7 +78,7 @@ python -m src.main --mitigation on    # full closed-loop response
 The package is on PyPI:
 
 ```bash
-pip install aros-s==0.1.2
+pip install aros-s==0.1.4
 ```
 
 That gives you the library. To actually run the detector with the simulators and your own config, clone the repo:
