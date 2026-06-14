@@ -9,6 +9,7 @@ import onnxruntime as ort
 from collections import deque
 from src.bus_handler import TelemetryBus
 from huggingface_hub import hf_hub_download
+from src.responder import Responder
 
 LOG_DIR="logs"
 LOG_FILE=os.path.join(LOG_DIR, f"mission_log_{time.strftime('%Y%m%d_%H%M%S')}.csv")
@@ -63,7 +64,7 @@ def log_telemetry(data_row):
             writer.writeheader()
         writer.writerow(data_row)
 
-def start_monitor(mode='UDP'):
+def start_monitor(mode='UDP', mitigation=None):
 
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR)
@@ -109,6 +110,7 @@ def start_monitor(mode='UDP'):
     s_temporal = sessions['temporal']
 
     window_buf = deque(maxlen=W)   #rolling buffer of the last W scaled packets
+    responder = Responder(enabled=mitigation)   #autonomous mitigation (CLI/env toggle; no-op if off)
 
     bus = TelemetryBus(mode=mode)
     print(f"AROS-S: {mode} stream active. Listening for packets...")
@@ -192,6 +194,9 @@ def start_monitor(mode='UDP'):
             per_feat = ((w2 - r2) ** 2).mean(axis=0)   # shape (5,)
             cause, cause_val = top_feature(per_feat, feature_order)
 
+        #autonomous responder: graduated, authenticated, verified mitigation (no-op if disabled)
+        mitigation_label = responder.handle(status, source, cause)
+
         #formatted telemetry Log
         timestamp = time.strftime("%H:%M:%S")
         detail = f" ({cause})" if status != "Nominal" else ""
@@ -209,6 +214,7 @@ def start_monitor(mode='UDP'):
             'temp_mse': round(t_mse, 4),
             'cause': cause,
             'cause_score': round(cause_val, 4),
+            'mitigation': mitigation_label,
             'status': status,
             'source': source
         })
