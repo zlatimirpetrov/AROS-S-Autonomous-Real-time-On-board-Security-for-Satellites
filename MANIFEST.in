@@ -1,3 +1,8 @@
 global-exclude convert_to_onnx.py
 global-exclude upload_to_hf.py
 global-exclude upload_to_bucket.py
+global-exclude baseline_ablation.py
+global-exclude diagnose.py
+global-exclude refresh_signatures.py
+global-exclude validate.py
+global-exclude validate_onnx.py

@@ -1,13 +1,20 @@
-# Secrets
+#Secrets
 .env
 *.local
 api-key.md
 
-# Token-bearing helper scripts (keep out of the public repo)
+#Token-bearing helper scripts 
 src/upload_to_bucket.py
 src/upload_to_hf.py
 
-# Python artifacts
+#Dev / research scripts 
+src/baseline_ablation.py
+src/diagnose.py
+src/refresh_signatures.py
+src/validate.py
+src/validate_onnx.py
+
+#Python artifacts
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -22,12 +29,10 @@ logs/
 data/
 
 # Models
-# Keeping .joblib (large intermediates) out of git.
-# ONNX models: UNCOMMENT the next line if you choose Option B (regenerate models locally).
 # models/*.onnx
 models/*.joblib
 
-# Stray root artifact
+#stray root artifact
 AROS_BRAIN.onnx
 
 # OS / editor
