@@ -197,6 +197,44 @@ The models are trained against both my synthetic nominal data and NASA SMAP-deri
 - [x] Container hardening — rootless runtime, read-only filesystem, cgroup limits, dropped capabilities (Dockerfile + run.sh / run.ps1 included)
 - [ ] Ongoing recalibration against larger orbital datasets
 
+## Reproducing the paper's results
+
+The numbers reported in the paper are reproducible from the code and data in this repository.
+
+```bash
+pip install -r requirements.txt
+
+# Full deterministic audit (footprint, scaler, per-layer percentiles,
+# false-alarm rate, ablation over 10 seeds) — reproduces Tables I–IV.
+python -m tests.final_audit
+
+# SMAP baseline comparison (AROS-S vs Isolation Forest, One-Class SVM, LOF) — Table V.
+# Requires the Telemanom dataset unzipped under data/telemanom/
+# (train/, test/, labeled_anomalies.csv).
+python -m src.baseline_comparison
+
+# Masking-attack experiment (partitioned vs single forest).
+python -m src.masking_attack
+```
+
+All randomness is seeded (`seed=42` by default), so results are deterministic; the
+multi-seed tables report mean ± standard deviation over ten seeds.
+
+## Running the tests
+
+```bash
+pip install -r requirements.txt
+python -m tests.final_audit            # deterministic checks, prints PASS/FAIL per item
+python -m tests.test_model_equivalence # verifies ONNX outputs match the scikit-learn models
+```
+
+## Contributing and support
+
+Contributions, bug reports, and questions are welcome. Please open an issue on the
+[GitHub issue tracker](https://github.com/zlatimirpetrov/AROS-S-Autonomous-Real-time-On-board-Security-for-Satellites/issues)
+to report a bug, request a feature, or ask for help, and see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for how to propose changes via pull request.
+
 ## License
 
 See [LICENSE](LICENSE).
