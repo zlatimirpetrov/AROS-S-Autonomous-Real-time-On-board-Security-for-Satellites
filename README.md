@@ -17,7 +17,8 @@ https://github.com/user-attachments/assets/8d450139-d414-4765-a8ef-a941a61c188d
 - Model registry (Hugging Face): https://huggingface.co/zlatimirpetrov/aros-s-anomaly-detector
 - Telemetry storage bucket (Hugging Face): https://huggingface.co/buckets/zlatimirpetrov/aros-s-detector-storage
 - PyPI package: https://pypi.org/project/aros-s/
-- ML technical paper (Overleaf): https://www.overleaf.com/read/cjmdsczxpmyy#6d4d37
+- Paper (ResearchGate): https://www.researchgate.net/publication/408144170_AROS-S_A_Lightweight_Onboard_Anomaly_Detector_for_Satellite_Telemetry
+- Preprint DOI (Zenodo): https://doi.org/10.5281/zenodo.20945353
 
 The detector reads its models either from the local `models/` folder or straight from the Hugging Face registry above. Raw ground-station telemetry logs get synced to the storage bucket.
 
